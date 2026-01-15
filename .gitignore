@@ -1,0 +1,119 @@
+# ===== 环境变量和配置 =====
+.env
+.env.local
+.env.*.local
+.envrc
+*.env
+
+# ===== Python 字节码 =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ===== 虚拟环境 =====
+venv/
+env/
+ENV/
+.venv
+.ENV/
+virtualenv/
+
+# ===== IDE 和编辑器 =====
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ===== 测试和覆盖率 =====
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# ===== 构建和分发 =====
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# ===== Jupyter Notebook =====
+.ipynb_checkpoints
+*.ipynb
+
+# ===== 日志文件 =====
+*.log
+logs/
+*.log.*
+
+# ===== 数据库 =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 缓存和临时文件 =====
+.cache/
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== 项目特定 =====
+# 上传的文件
+uploads/
+media/
+static/collected/
+
+# 数据文件（根据需要调整）
+data/
+*.csv
+*.xlsx
+*.json
+
+# 模型文件
+*.pkl
+*.h5
+*.pth
+*.ckpt
+models/
+
+# 文档构建
+docs/_build/
+site/
+
+# ===== LlamaIndex 特定 =====
+storage/
+vector_store/
+index_store/
+*.index
+
+# ===== FastAPI/Flask 特定 =====
+instance/
+.webassets-cache
+
+# ===== 其他 =====
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
