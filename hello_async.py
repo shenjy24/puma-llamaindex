@@ -11,6 +11,7 @@ async def main():
     print("Starting main function")
     # Schedule multiple fetch_data calls concurrently
     tasks = [
+        
         fetch_data(2),
         fetch_data(3),
         fetch_data(1)
