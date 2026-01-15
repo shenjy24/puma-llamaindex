@@ -11,6 +11,8 @@ from llama_index.core.agent.workflow import (
     AgentStream,
 )
 
+# https://github.com/run-llama/python-agents-tutorial/blob/main/4_streaming.py
+
 # 加载 .env 文件中的环境变量
 # 这行代码会查找当前目录下的 .env 文件并将变量注入到 os.environ 中
 load_dotenv()
