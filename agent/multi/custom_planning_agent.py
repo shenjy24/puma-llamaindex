@@ -33,9 +33,7 @@ load_dotenv()
 api_key = os.getenv("DEEPSEEK_API_KEY")
 api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
 model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-tavily_api_key = os.getenv(
-    "TAVILY_API_KEY", "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"
-)
+tavily_api_key = os.getenv("TAVILY_API_KEY")
 
 sub_agent_llm = DeepSeek(
     model=model_name,
