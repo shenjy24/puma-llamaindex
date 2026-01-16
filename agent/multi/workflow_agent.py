@@ -124,18 +124,18 @@ async def main():
         elif isinstance(event, AgentOutput):
             if event.response.content:
                 print("📤 Output:", event.response.content)
-            if event.tool_calls:
-                print(
-                    "🛠️  Planning to use tools:",
-                    [call.tool_name for call in event.tool_calls],
-                )
-        elif isinstance(event, ToolCallResult):
-            print(f"🔧 Tool Result ({event.tool_name}):")
-            print(f"  Arguments: {event.tool_kwargs}")
-            print(f"  Output: {event.tool_output}")
-        elif isinstance(event, ToolCall):
-            print(f"🔨 Calling Tool: {event.tool_name}")
-            print(f"  With arguments: {event.tool_kwargs}")
+            # if event.tool_calls:
+            #     print(
+            #         "🛠️  Planning to use tools:",
+            #         [call.tool_name for call in event.tool_calls],
+            #     )
+        # elif isinstance(event, ToolCallResult):
+        #     print(f"🔧 Tool Result ({event.tool_name}):")
+        #     print(f"  Arguments: {event.tool_kwargs}")
+        #     print(f"  Output: {event.tool_output}")
+        # elif isinstance(event, ToolCall):
+        #     print(f"🔨 Calling Tool: {event.tool_name}")
+        #     print(f"  With arguments: {event.tool_kwargs}")
 
 
 if __name__ == "__main__":
