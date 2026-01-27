@@ -30,6 +30,7 @@ class ProductionRAGService:
         self,
         collection_name: str = "production_rag_hybrid",
         qdrant_url: str = "http://localhost:6333",
+        qdrant_api_key: str = None,
         openai_api_key: str = None,
     ):
         """
@@ -48,7 +49,7 @@ class ProductionRAGService:
 
         # 3. 初始化 Qdrant 客户端 (生产级向量数据库)
         # 注意：enable_hybrid=True 开启稀疏向量索引，fastembed_sparse_model 指定稀疏模型
-        self.client = qdrant_client.QdrantClient(url=qdrant_url)
+        self.client = qdrant_client.QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.vector_store = QdrantVectorStore(
             client=self.client,
             collection_name=collection_name,
