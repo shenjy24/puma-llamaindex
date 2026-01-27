@@ -1,4 +1,5 @@
 import os
+
 # 必须放在第一行，任何其他 import 之前
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
@@ -48,6 +49,7 @@ async def search_documents(query: str) -> str:
     response = await query_engine.aquery(query)
     return str(response)
 
+
 # Create an enhanced workflow with both tools
 agent = AgentWorkflow.from_tools_or_functions(
     [search_documents],
@@ -55,12 +57,12 @@ agent = AgentWorkflow.from_tools_or_functions(
     system_prompt="""You are a helpful assistant that can search through documents to answer questions.""",
 )
 
+
 # Now we can ask questions about the documents or do calculations
 async def main():
-    response = await agent.run(
-        "What did the author do in college?"
-    )
+    response = await agent.run("What did the author do in college?")
     print(response)
+
 
 # Run the agent
 if __name__ == "__main__":
