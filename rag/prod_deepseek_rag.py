@@ -179,9 +179,9 @@ if __name__ == "__main__":
     )
 
     # 1. 首次运行时摄入数据
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(base_dir, "data")
-    rag_service.ingest_documents(data_dir)
+    # base_dir = os.path.dirname(os.path.abspath(__file__))
+    # data_dir = os.path.join(base_dir, "data")
+    # rag_service.ingest_documents(data_dir)
 
     # 2. 提问
     answer = rag_service.query("PDFBox 提供的一些关键功能和功能有哪些？")
