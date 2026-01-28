@@ -1,6 +1,7 @@
 # 生产级别的RAG服务示例: 使用硅基流动的模型
 import os
 from dotenv import load_dotenv
+from typing import Any, List
 
 # LlamaIndex v0.10+ 核心组件
 from llama_index.core import (
@@ -23,9 +24,11 @@ from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
 
+import openai
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai_like import OpenAILike
+from llama_index.core.embeddings import BaseEmbedding
 
 # 加载 .env 文件中的环境变量
 # 这行代码会查找当前目录下的 .env 文件并将变量注入到 os.environ 中
@@ -50,29 +53,11 @@ class ProductionRAGService:
         # =========================================================
         # 原来的 HuggingFaceEmbedding 是本地跑，现在改用 OpenAIEmbedding 调云端 API
         # 硅基流动支持的模型 ID 为: "BAAI/bge-m3"
-        Settings.embed_model = OpenAIEmbedding(
-            model="text-embedding-3-small",
-            api_base=silicon_api_base,
+        Settings.embed_model = SiliconFlowEmbedding(
+            model_name="BAAI/bge-m3",
             api_key=silicon_api_key,
-            # 这一步是为了防止 LlamaIndex 自动去 OpenAI 官网校验模型名
-            check_model_name=False,
-            # --- 关键修复参数 (必填) ---
-            # 1. 显式指定分词器 (Tokenizer)
-            # 原因：LlamaIndex 本地找不到 "BAAI/bge-m3" 的分词规则，会报 KeyError。
-            # 解决：强制借用 GPT-4 的分词器 (cl100k_base) 来估算长度（只要不超长，这没影响）。
-            tokenizer_name="cl100k_base",
-            # 2. 显式指定向量维度 (Dimensions)
-            # 原因：OpenAI 默认为 1536，但 BGE-M3 是 1024。
-            # 解决：必须告诉 LlamaIndex 正确的维度，否则向量数据库初始化会错。
-            dimensions=1024,
-            # 3. 限制 Batch Size (可选，建议设置)
-            # 原因：第三方 API 有时对单次并发限制较严，默认 100 可能太大了。
-            embed_batch_size=10,
+            api_base=silicon_api_base,
         )
-        # 此时对象已经创建，LlamaIndex 的校验逻辑已经跑完了，改这里它是拦不住的
-        real_model_name = "BAAI/bge-m3"
-        Settings.embed_model.model_name = real_model_name
-        Settings.embed_model._model_name = real_model_name
 
         # =========================================================
         # 配置 LLM (大语言模型) - 使用硅基流动 DeepSeek-V3
@@ -194,6 +179,61 @@ class ProductionRAGService:
         #     print(f"Debug Source: {node.score:.4f} - {node.text[:50]}...")
 
         return str(response)
+
+
+class SiliconFlowEmbedding(BaseEmbedding):
+    """
+    专门为硅基流动 (SiliconFlow) 定制的 Embedding 类
+    绕过 LlamaIndex 对 OpenAI 模型名称的强制校验
+    """
+    _client: openai.Client = PrivateAttr()
+    _model_name: str = PrivateAttr()
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-m3",
+        api_key: str = None,
+        api_base: str = "https://api.siliconflow.cn/v1",
+        **kwargs: Any,
+    ):
+        super().__init__(model_name=model_name, **kwargs)
+        self._model_name = model_name
+        # 初始化标准的 OpenAI 客户端
+        self._client = openai.Client(api_key=api_key, base_url=api_base)
+
+    def _get_query_embedding(self, query: str) -> List[float]:
+        """获取单个查询的 embedding"""
+        return self._get_embedding(query)
+
+    def _get_text_embedding(self, text: str) -> List[float]:
+        """获取单个文档片段的 embedding"""
+        return self._get_embedding(text)
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """
+        批量获取 embedding (关键优化：减少网络请求次数)
+        """
+        # 移除换行符是 embedding 的最佳实践
+        texts = [t.replace("\n", " ") for t in texts]
+        try:
+            response = self._client.embeddings.create(
+                input=texts, model=self._model_name
+            )
+            # 按照返回顺序提取 embedding
+            return [data.embedding for data in response.data]
+        except Exception as e:
+            print(f"Error generating embeddings: {e}")
+            raise e
+
+    def _get_embedding(self, text: str) -> List[float]:
+        """内部通用方法"""
+        text = text.replace("\n", " ")
+        response = self._client.embeddings.create(input=[text], model=self._model_name)
+        return response.data[0].embedding
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        # 简单起见，暂不实现异步，直接调同步方法
+        return self._get_query_embedding(query)
 
 
 class SiliconFlowRerank(BaseNodePostprocessor):
