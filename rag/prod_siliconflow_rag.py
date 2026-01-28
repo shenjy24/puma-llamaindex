@@ -1,0 +1,286 @@
+# 生产级别的RAG服务示例: 使用硅基流动的模型
+import os
+from dotenv import load_dotenv
+
+# LlamaIndex v0.10+ 核心组件
+from llama_index.core import (
+    Settings,
+    VectorStoreIndex,
+    StorageContext,
+    SimpleDirectoryReader,
+    get_response_synthesizer,
+)
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.retrievers import VectorIndexRetriever
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+import qdrant_client
+
+import requests
+from typing import List, Optional
+from llama_index.core.bridge.pydantic import Field, PrivateAttr
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle
+
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai_like import OpenAILike
+
+# 加载 .env 文件中的环境变量
+# 这行代码会查找当前目录下的 .env 文件并将变量注入到 os.environ 中
+load_dotenv()
+
+
+class ProductionRAGService:
+    def __init__(
+        self,
+        collection_name: str = "production_rag_hybrid",
+        qdrant_url: str = "http://localhost:6333",
+        qdrant_api_key: str = None,
+        silicon_api_key: str = None,
+        silicon_api_base: str = None,
+    ):
+        """
+        初始化 RAG 服务，配置混合检索与重排序
+        """
+        # 1. 全局模型配置 (使用 v0.10+ Settings)
+        # =========================================================
+        # 配置 Embedding (嵌入模型) - 使用硅基流动云端版 BGE-M3
+        # =========================================================
+        # 原来的 HuggingFaceEmbedding 是本地跑，现在改用 OpenAIEmbedding 调云端 API
+        # 硅基流动支持的模型 ID 为: "BAAI/bge-m3"
+        Settings.embed_model = OpenAIEmbedding(
+            model="text-embedding-3-small",
+            api_base=silicon_api_base,
+            api_key=silicon_api_key,
+            # 这一步是为了防止 LlamaIndex 自动去 OpenAI 官网校验模型名
+            check_model_name=False,
+            # --- 关键修复参数 (必填) ---
+            # 1. 显式指定分词器 (Tokenizer)
+            # 原因：LlamaIndex 本地找不到 "BAAI/bge-m3" 的分词规则，会报 KeyError。
+            # 解决：强制借用 GPT-4 的分词器 (cl100k_base) 来估算长度（只要不超长，这没影响）。
+            tokenizer_name="cl100k_base",
+            # 2. 显式指定向量维度 (Dimensions)
+            # 原因：OpenAI 默认为 1536，但 BGE-M3 是 1024。
+            # 解决：必须告诉 LlamaIndex 正确的维度，否则向量数据库初始化会错。
+            dimensions=1024,
+            # 3. 限制 Batch Size (可选，建议设置)
+            # 原因：第三方 API 有时对单次并发限制较严，默认 100 可能太大了。
+            embed_batch_size=10,
+        )
+        # 此时对象已经创建，LlamaIndex 的校验逻辑已经跑完了，改这里它是拦不住的
+        real_model_name = "BAAI/bge-m3"
+        Settings.embed_model.model_name = real_model_name
+        Settings.embed_model._model_name = real_model_name
+
+        # =========================================================
+        # 配置 LLM (大语言模型) - 使用硅基流动 DeepSeek-V3
+        # =========================================================
+        # 注意：硅基流动的 DeepSeek V3 模型 ID 通常是 "deepseek-ai/DeepSeek-V3"
+        # 如果你想用 R1，就改成 "deepseek-ai/DeepSeek-R1"
+        Settings.llm = OpenAILike(
+            model="deepseek-ai/DeepSeek-V3",
+            api_base=silicon_api_base,
+            api_key=silicon_api_key,
+            is_chat_model=True,
+            # --- RAG 核心优化参数 (保持不变) ---
+            # 1. 温度: 极低，减少幻觉
+            temperature=0.0,
+            # 2. 上下文窗口: 即使是 OpenAI 类，最好也显式声明，防止库默认使用 GPT-3.5 的 4k 限制
+            # 告诉 LlamaIndex 这个模型能吃 60k token
+            context_window=60000,
+            # 3. 最大输出
+            max_tokens=4096,
+            # 4. 重试机制
+            max_retries=3,
+            # 5. 额外参数
+            additional_kwargs={
+                "top_p": 0.95,
+            },
+            # 6. (可选) 设为 True 可以让 LlamaIndex 复用 API 连接，提升一点点速度
+            reuse_client=True
+        )
+
+        # 2. 文本切分策略 (Chunking)
+        # 生产环境建议：块大一些以保留上下文，但在检索时切分更细或使用 overlap
+        Settings.node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+
+        # 3. 初始化 Qdrant 客户端 (生产级向量数据库)
+        # 注意：enable_hybrid=True 开启稀疏向量索引，fastembed_sparse_model 指定稀疏模型
+        self.client = qdrant_client.QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        self.vector_store = QdrantVectorStore(
+            client=self.client,
+            collection_name=collection_name,
+            enable_hybrid=True,
+            fastembed_sparse_model="Qdrant/bm25",  # 使用轻量级 BM25 模型生成稀疏向量
+        )
+
+        # 4. 初始化重排序模型 (Re-ranker)
+        # ==========================================
+        # 使用方法：替换掉你原来的 SentenceTransformerRerank
+        # ==========================================
+        # 硅基流动目前支持的模型 ID 是 "BAAI/bge-reranker-v2-m3"
+        self.reranker = SiliconFlowRerank(
+            model="BAAI/bge-reranker-v2-m3",
+            api_key=silicon_api_key,
+            top_n=3,
+        )
+
+        self.index = self._load_or_create_index()
+
+    def _load_or_create_index(self) -> VectorStoreIndex:
+        """加载现有索引或创建新索引的容器"""
+        storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+
+        # 尝试从向量库加载索引 (不重新计算 embedding)
+        try:
+            index = VectorStoreIndex.from_vector_store(
+                vector_store=self.vector_store, storage_context=storage_context
+            )
+            print("✅ 已连接到现有的持久化向量索引。")
+            return index
+        except Exception as e:
+            print(f"ℹ️ 初始化空索引: {e}")
+            return VectorStoreIndex.from_documents([], storage_context=storage_context)
+
+    def ingest_documents(self, data_dir: str):
+        """
+        数据摄入管道：读取 -> 切分 -> 嵌入 -> 存储
+        """
+        print(f"📂 正在从 {data_dir} 读取文档...")
+        documents = SimpleDirectoryReader(data_dir).load_data()
+
+        # 使用 IngestionPipeline 处理去重和转换
+        pipeline = IngestionPipeline(
+            transformations=[
+                Settings.node_parser,
+                Settings.embed_model,
+            ],
+            vector_store=self.vector_store,
+        )
+
+        # 运行管道 (计算 embedding 并存入 Qdrant)
+        # 这一步会自动计算 Dense Vector (OpenAI) 和 Sparse Vector (BM25)
+        nodes = pipeline.run(documents=documents)
+        print(f"🎉 成功索引 {len(nodes)} 个节点到 Qdrant。")
+
+    def query(self, query_text: str) -> str:
+        """
+        执行 RAG 查询：混合检索 -> 重排序 -> LLM 合成
+        """
+        # 1. 配置混合检索器 (Hybrid Retriever)
+        # alpha 参数控制权重：0.5 表示 50% 向量搜索 + 50% 关键词搜索
+        retriever = VectorIndexRetriever(
+            index=self.index,
+            similarity_top_k=10,  # 召回更多文档用于重排序 (例如 10 个)
+            vector_store_query_mode="hybrid",
+            sparse_top_k=10,
+            alpha=0.5,
+        )
+
+        # 2. 构建查询引擎
+        query_engine = RetrieverQueryEngine(
+            retriever=retriever,
+            node_postprocessors=[self.reranker],  # 在此处加入重排序
+            response_synthesizer=get_response_synthesizer(response_mode="compact"),
+        )
+
+        # 3. 执行查询
+        response = query_engine.query(query_text)
+
+        # (可选) 打印检索到的来源以供调试
+        # for node in response.source_nodes:
+        #     print(f"Debug Source: {node.score:.4f} - {node.text[:50]}...")
+
+        return str(response)
+
+
+class SiliconFlowRerank(BaseNodePostprocessor):
+    """
+    自定义的硅基流动 Rerank 处理器
+    """
+
+    siliconflow_api_base: str = os.getenv("SILICONFLOW_API_BASE", "")
+    model: str = Field(description="Rerank model name")
+    top_n: int = Field(description="Top N nodes to return")
+    api_key: str = Field(description="SiliconFlow API Key")
+    base_url: str = Field(default=siliconflow_api_base, description="API Endpoint")
+
+    def _postprocess_nodes(
+        self,
+        nodes: List[NodeWithScore],
+        query_bundle: Optional[QueryBundle] = None,
+    ) -> List[NodeWithScore]:
+        if not nodes:
+            return []
+
+        request_url = self.base_url
+        if not request_url.endswith("/rerank"):
+            # 简单的拼接处理，防止用户只填了 base 域名
+            if request_url.endswith("/v1"):
+                request_url = f"{request_url}/rerank"
+            else:
+                request_url = f"{request_url}/v1/rerank"
+
+        # 准备请求数据
+        documents = [node.node.get_content() for node in nodes]
+        payload = {
+            "model": self.model,
+            "query": query_bundle.query_str,
+            "documents": documents,
+            "top_n": self.top_n,
+            "return_documents": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # 发送请求
+        try:
+            response = requests.post(request_url, json=payload, headers=headers)
+            response.raise_for_status()
+            results = response.json().get("results", [])
+
+            # 根据返回的 index 重新排序并赋值分数
+            new_nodes = []
+            for res in results:
+                idx = res["index"]
+                score = res["relevance_score"]
+
+                node = nodes[idx]
+                node.score = score  # 更新分数为 Cross-Encoder 的精准分数
+                new_nodes.append(node)
+
+            return new_nodes
+
+        except Exception as e:
+            print(f"Rerank API Error: {e}")
+            # 如果 API 挂了，降级返回原来的前 N 个，防止程序崩溃
+            return nodes[: self.top_n]
+
+
+# --- 使用示例 ---
+if __name__ == "__main__":
+
+    silicon_api_key: str = os.getenv("SILICONFLOW_API_KEY", "")
+    silicon_api_base = os.getenv("SILICONFLOW_API_BASE", "")
+    qdrant_api_key: str = os.getenv("QDRANT_API_KEY", "")
+    qdrant_api_base: str = os.getenv("QDRANT_API_BASE", "")
+
+    rag_service = ProductionRAGService(
+        qdrant_url=qdrant_api_base,
+        qdrant_api_key=qdrant_api_key,
+        silicon_api_key=silicon_api_key,
+        silicon_api_base=silicon_api_base,
+    )
+
+    # 1. 首次运行时摄入数据
+    # base_dir = os.path.dirname(os.path.abspath(__file__))
+    # data_dir = os.path.join(base_dir, "data")
+    # rag_service.ingest_documents(data_dir)
+
+    # 2. 提问
+    answer = rag_service.query("PDFBox 提供的一些关键功能和功能有哪些？")
+    print(f"\n🤖 回答:\n{answer}")
