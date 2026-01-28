@@ -1,7 +1,9 @@
-import os
-from typing import List, Optional
-
 # 生产级别的RAG服务示例
+import os
+# 必须放在第一行，任何其他 import 之前
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+from typing import List, Optional
+from dotenv import load_dotenv
 
 # LlamaIndex v0.10+ 核心组件
 from llama_index.core import (
@@ -24,6 +26,9 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
 import qdrant_client
 
+# 加载 .env 文件中的环境变量
+# 这行代码会查找当前目录下的 .env 文件并将变量注入到 os.environ 中
+load_dotenv()
 
 class ProductionRAGService:
     def __init__(
@@ -136,15 +141,15 @@ class ProductionRAGService:
 
 # --- 使用示例 ---
 if __name__ == "__main__":
-    # 假设你已经在本地启动了 Qdrant (docker run -p 6333:6333 qdrant/qdrant)
 
     rag_service = ProductionRAGService(
-        openai_api_key="sk-proj-...",  # 替换为你的 Key
-        qdrant_url="http://localhost:6333",
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        qdrant_url="https://d5ba48cb-d32d-4d42-a111-6f70b300d550.europe-west3-0.gcp.cloud.qdrant.io",
+        qdrant_api_key=os.getenv("QDRANT_API_KEY"),
     )
 
     # 1. 首次运行时摄入数据
-    # rag_service.ingest_documents("./data")
+    rag_service.ingest_documents("rag/data")
 
     # 2. 提问
     answer = rag_service.query("LlamaIndex 的混合检索是如何工作的？")
