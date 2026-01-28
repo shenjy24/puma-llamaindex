@@ -3,7 +3,6 @@ import os
 
 # 必须放在第一行，任何其他 import 之前
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-from typing import List, Optional
 from dotenv import load_dotenv
 
 # LlamaIndex v0.10+ 核心组件
@@ -12,7 +11,6 @@ from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
     SimpleDirectoryReader,
-    Document,
     get_response_synthesizer,
 )
 from llama_index.core.node_parser import SentenceSplitter
@@ -23,9 +21,7 @@ from llama_index.core.postprocessor import SentenceTransformerRerank
 
 # 向量库与嵌入模型
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.openai import OpenAI
 from llama_index.llms.deepseek import DeepSeek
 import qdrant_client
 
