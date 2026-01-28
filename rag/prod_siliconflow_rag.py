@@ -183,7 +183,10 @@ class ProductionRAGService:
         执行流式 RAG 查询：混合检索 -> 重排序 -> LLM 流式合成
         返回一个生成器，逐个 token 输出响应
         """
-        # 1. 配置混合检索器 (Hybrid Retriever)
+        # 立即给用户反馈（非常重要）
+        yield "🔍 正在检索相关资料...\n"
+
+        # 配置混合检索器 (Hybrid Retriever)
         retriever = VectorIndexRetriever(
             index=self.index,
             similarity_top_k=10,
@@ -192,7 +195,7 @@ class ProductionRAGService:
             alpha=0.5,
         )
 
-        # 2. 构建查询引擎 (使用流式合成器)
+        # 构建查询引擎 (使用流式合成器)
         query_engine = RetrieverQueryEngine(
             retriever=retriever,
             node_postprocessors=[self.reranker],
@@ -201,11 +204,22 @@ class ProductionRAGService:
             ),
         )
 
-        # 3. 执行流式查询
-        response = query_engine.query(query_text)
+        yield "🧠 正在生成答案...\n\n"
 
-        # 返回流式响应的生成器
-        return response.response_gen
+        # 执行流式查询
+        try:
+            response = query_engine.query(query_text)
+        except Exception as e:
+            yield f"⚠️ 查询失败：{str(e)}"
+            return
+
+        # 稳定流式输出
+        if hasattr(response, "response_gen") and response.response_gen:
+            for token in response.response_gen:
+                yield token
+        else:
+            # 降级兜底（极少发生）
+            yield str(response)
 
 
 class SiliconFlowEmbedding(BaseEmbedding):
@@ -350,7 +364,6 @@ if __name__ == "__main__":
     # rag_service.ingest_documents(data_dir)
 
     # 2. 流式提问示例
-    print("🤖 流式回答:\n")
     stream_generator = rag_service.stream_query(
         "PDFBox 提供的一些关键功能和功能有哪些？"
     )
