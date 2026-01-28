@@ -25,8 +25,6 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
 
 import openai
-from llama_index.llms.openai import OpenAI
-from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.core.embeddings import BaseEmbedding
 
@@ -84,7 +82,7 @@ class ProductionRAGService:
                 "top_p": 0.95,
             },
             # 6. (可选) 设为 True 可以让 LlamaIndex 复用 API 连接，提升一点点速度
-            reuse_client=True
+            reuse_client=True,
         )
 
         # 2. 文本切分策略 (Chunking)
@@ -186,6 +184,7 @@ class SiliconFlowEmbedding(BaseEmbedding):
     专门为硅基流动 (SiliconFlow) 定制的 Embedding 类
     绕过 LlamaIndex 对 OpenAI 模型名称的强制校验
     """
+
     _client: openai.Client = PrivateAttr()
     _model_name: str = PrivateAttr()
 
