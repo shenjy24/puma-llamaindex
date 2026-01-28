@@ -178,6 +178,35 @@ class ProductionRAGService:
 
         return str(response)
 
+    def stream_query(self, query_text: str):
+        """
+        执行流式 RAG 查询：混合检索 -> 重排序 -> LLM 流式合成
+        返回一个生成器，逐个 token 输出响应
+        """
+        # 1. 配置混合检索器 (Hybrid Retriever)
+        retriever = VectorIndexRetriever(
+            index=self.index,
+            similarity_top_k=10,
+            vector_store_query_mode="hybrid",
+            sparse_top_k=10,
+            alpha=0.5,
+        )
+
+        # 2. 构建查询引擎 (使用流式合成器)
+        query_engine = RetrieverQueryEngine(
+            retriever=retriever,
+            node_postprocessors=[self.reranker],
+            response_synthesizer=get_response_synthesizer(
+                response_mode="compact", streaming=True
+            ),
+        )
+
+        # 3. 执行流式查询
+        response = query_engine.query(query_text)
+
+        # 返回流式响应的生成器
+        return response.response_gen
+
 
 class SiliconFlowEmbedding(BaseEmbedding):
     """
@@ -320,6 +349,15 @@ if __name__ == "__main__":
     # data_dir = os.path.join(base_dir, "data")
     # rag_service.ingest_documents(data_dir)
 
-    # 2. 提问
-    answer = rag_service.query("PDFBox 提供的一些关键功能和功能有哪些？")
-    print(f"\n🤖 回答:\n{answer}")
+    # 2. 流式提问示例
+    print("🤖 流式回答:\n")
+    stream_generator = rag_service.stream_query(
+        "PDFBox 提供的一些关键功能和功能有哪些？"
+    )
+    for token in stream_generator:
+        print(token, end="", flush=True)
+    print("\n")
+
+    # 3. 非流式提问示例 (如需要)
+    # answer = rag_service.query("PDFBox 提供的一些关键功能和功能有哪些？")
+    # print(f"\n🤖 回答:\n{answer}")
