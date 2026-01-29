@@ -27,6 +27,8 @@ from llama_index.core.schema import NodeWithScore, QueryBundle
 import openai
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.core.embeddings import BaseEmbedding
+from llama_index.core.chat_engine import ContextChatEngine
+from llama_index.core.memory import ChatMemoryBuffer
 
 # 加载 .env 文件中的环境变量
 # 这行代码会查找当前目录下的 .env 文件并将变量注入到 os.environ 中
@@ -109,6 +111,9 @@ class ProductionRAGService:
             api_key=silicon_api_key,
             top_n=3,
         )
+
+        # 记忆组件
+        self.memory = ChatMemoryBuffer.from_defaults(token_limit=3900)
 
         self.index = self._load_or_create_index()
 
@@ -209,6 +214,48 @@ class ProductionRAGService:
         # 执行流式查询
         try:
             response = query_engine.query(query_text)
+        except Exception as e:
+            yield f"⚠️ 查询失败：{str(e)}"
+            return
+
+        # 稳定流式输出
+        if hasattr(response, "response_gen") and response.response_gen:
+            for token in response.response_gen:
+                yield token
+        else:
+            # 降级兜底（极少发生）
+            yield str(response)
+
+    def stream_memory_query(self, query_text: str):
+        """
+        执行带记忆功能的流式 RAG 查询
+        """
+        # 立即给用户反馈（非常重要）
+        yield "🔍 正在检索相关资料...\n"
+
+        # 配置混合检索器 (Hybrid Retriever)
+        retriever = VectorIndexRetriever(
+            index=self.index,
+            similarity_top_k=10,
+            vector_store_query_mode="hybrid",
+            sparse_top_k=10,
+            alpha=0.5,
+        )
+
+        # 构建 ContextChatEngine
+        # 它会自动处理：历史对话重写 + 知识检索 + 答案合成
+        chat_engine = ContextChatEngine.from_defaults(
+            retriever=retriever,
+            node_postprocessors=[self.reranker],
+            memory=self.memory,
+            system_prompt="你是一个专业助手。请结合给定的本地知识库和对话历史来回答问题。",
+        )
+
+        yield "🧠 正在生成答案...\n\n"
+
+        # 执行流式查询
+        try:
+            response = chat_engine.stream_chat(query_text)
         except Exception as e:
             yield f"⚠️ 查询失败：{str(e)}"
             return
